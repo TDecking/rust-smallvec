@@ -361,23 +361,17 @@ impl<T, const N: usize> Drain<'_, T, N> {
     /// range. (`replace_with.next()` didn’t return `None`.)
     unsafe fn fill<I: Iterator<Item = T>>(&mut self, replace_with: &mut I) -> bool {
         let vec = unsafe { self.vec.as_mut() };
-        let range_start = vec.len();
         let range_end = self.tail_start;
-        let range_slice = unsafe {
-            core::slice::from_raw_parts_mut(
-                vec.as_mut_ptr().add(range_start),
-                range_end - range_start
-            )
-        };
 
-        for place in range_slice {
-            if let Some(new_item) = replace_with.next() {
-                unsafe {
-                    core::ptr::write(place, new_item);
-                    vec.len.add(1);
-                }
-            } else {
+        while vec.len() < range_end {
+            let Some(new_item) = replace_with.next() else {
                 return false;
+            };
+            let len = vec.len();
+            // SAFETY: len < tail_start <= capacity
+            unsafe {
+                vec.as_mut_ptr().add(len).write(new_item);
+                vec.set_len(len + 1);
             }
         }
         true
@@ -397,9 +391,12 @@ impl<T, const N: usize> Drain<'_, T, N> {
 
         let new_tail_start = self.tail_start + additional;
         unsafe {
-            let src = vec.as_ptr().add(self.tail_start);
-            let dst = vec.as_mut_ptr().add(new_tail_start);
-            core::ptr::copy(src, dst, self.tail_len);
+            let ptr = vec.as_mut_ptr();
+            core::ptr::copy(
+                ptr.add(self.tail_start),
+                ptr.add(new_tail_start),
+                self.tail_len
+            );
         }
         self.tail_start = new_tail_start;
     }
@@ -1102,6 +1099,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         if len == self.capacity() {
             self.reserve(1);
         }
+        debug_assert!(len < self.capacity());
 
         // SAFETY: `len < capacity` after the reserve,
         //         so the offset stays in bounds of the allocation.
@@ -1115,8 +1113,6 @@ impl<T, const N: usize> SmallVec<T, N> {
             // This block is an exact copy of `self.set_len`.
             // We have to do this so that Miri doesn't report a "Stacked
             // Borrows" rule violation. See PR/406
-
-            debug_assert!(len < self.capacity());
             // SAFETY: we have wrote the value to the address already
             unsafe {
                 self.len.add(1);
@@ -1437,6 +1433,7 @@ impl<T, const N: usize> SmallVec<T, N> {
             assert_failed(index, len);
         }
         self.reserve(1);
+        debug_assert!(len < self.capacity());
 
         // SAFETY: `index <= len <= capacity`,
         //         so the offset stays in bounds of the allocation.
@@ -1459,7 +1456,6 @@ impl<T, const N: usize> SmallVec<T, N> {
             // We have to do this so that Miri doesn't report a "Stacked
             // Borrows" rule violation. See PR/406
 
-            debug_assert!(len < self.capacity());
             // SAFETY: we have wrote the value to the address already
             unsafe {
                 self.len.add(1);
